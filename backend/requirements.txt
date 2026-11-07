@@ -1,0 +1,18 @@
+# Core API + simulation (required)
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.6.0
+numpy>=1.26.0
+scipy>=1.12.0
+scikit-learn>=1.4.0
+qiskit>=1.0.0
+qiskit-aer>=0.13.0
+
+# Optional integrations (the API degrades gracefully when absent)
+yfinance>=0.2.36
+classiq>=0.45.0
+qbraid>=0.8.0
+
+# Tests
+httpx>=0.27.0
+pytest>=8.0.0
