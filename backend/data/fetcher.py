@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import csv
-import io
+# import csv as _csv
+# import io
 import threading
 import zlib
 from dataclasses import dataclass
@@ -67,24 +68,83 @@ def rolling_volatility(series: PriceSeries, window: int = 21) -> PriceSeries:
     return PriceSeries(series.dates[window:], vol, series.source)
 
 
+# def parse_csv(text: str) -> PriceSeries:
+#     """Parse a CSV with a date column and a numeric value column (close/value/price, or the last column)."""
+#     reader = csv.DictReader(io.StringIO(text.strip()))
+#     if not reader.fieldnames or len(reader.fieldnames) < 2:
+#         raise ValueError("CSV must have a header row with a date column and a value column.")
+#     fields = {name.lower().strip(): name for name in reader.fieldnames}
+#     date_key = next((fields[k] for k in ("date", "timestamp", "time", "datetime") if k in fields), reader.fieldnames[0])
+#     value_key = next((fields[k] for k in ("close", "adj close", "value", "price") if k in fields), reader.fieldnames[-1])
+#     dates, values = [], []
+#     for row in reader:
+#         try:
+#             values.append(float(row[value_key]))
+#             dates.append(str(row[date_key]).strip())
+#         except (TypeError, ValueError):
+#             continue
+#     if len(values) < 60:
+#         raise ValueError("CSV needs at least 60 numeric rows for windowed forecasting.")
+#     return PriceSeries(dates, np.asarray(values, dtype=float), "upload")
+# def parse_csv(text: str) -> PriceSeries:
+#     try:
+#         reader = csv.DictReader(io.StringIO(text.strip()))
+#         if not reader.fieldnames or len(reader.fieldnames) < 2:
+#             raise ValueError("CSV must have a header row with a date column and a value column.")
+#         fields = {name.lower().strip(): name for name in reader.fieldnames if name is not None}
+#         date_key = next((fields[k] for k in ("date", "timestamp", "time", "datetime") if k in fields), reader.fieldnames[0])
+#         value_key = next((fields[k] for k in ("close", "adj close", "value", "price") if k in fields), reader.fieldnames[-1])
+#         dates, values = [], []
+#         for row in reader:
+#             try:
+#                 values.append(float(row[value_key]))
+#                 dates.append(str(row[date_key]).strip())
+#             except (TypeError, ValueError, KeyError):
+#                 continue
+#         if len(values) < 60:
+#             raise ValueError("CSV needs at least 60 numeric rows for windowed forecasting.")
+#         return PriceSeries(dates, np.asarray(values, dtype=float), "upload")
+#     except ValueError:
+#         raise  # let the route handler convert to 422
+#     except Exception as exc:
+#         raise ValueError(f"Malformed CSV: {exc}") from exc
 def parse_csv(text: str) -> PriceSeries:
-    """Parse a CSV with a date column and a numeric value column (close/value/price, or the last column)."""
-    reader = csv.DictReader(io.StringIO(text.strip()))
-    if not reader.fieldnames or len(reader.fieldnames) < 2:
-        raise ValueError("CSV must have a header row with a date column and a value column.")
-    fields = {name.lower().strip(): name for name in reader.fieldnames}
-    date_key = next((fields[k] for k in ("date", "timestamp", "time", "datetime") if k in fields), reader.fieldnames[0])
-    value_key = next((fields[k] for k in ("close", "adj close", "value", "price") if k in fields), reader.fieldnames[-1])
-    dates, values = [], []
-    for row in reader:
-        try:
-            values.append(float(row[value_key]))
-            dates.append(str(row[date_key]).strip())
-        except (TypeError, ValueError):
-            continue
-    if len(values) < 60:
-        raise ValueError("CSV needs at least 60 numeric rows for windowed forecasting.")
-    return PriceSeries(dates, np.asarray(values, dtype=float), "upload")
+    try:
+        # splitlines() handles \r\n, bare \r, and embedded newlines in quoted
+        # Excel cells — avoids the "new-line character seen in unquoted field" crash.
+        reader = csv.DictReader(text.strip().splitlines())
+        if not reader.fieldnames or len(reader.fieldnames) < 2:
+            raise ValueError("CSV must have at least 2 columns.")
+        fields = {name.lower().strip(): name for name in reader.fieldnames if name is not None}
+        # Require a recognizable numeric column — no silent last-column fallback.
+        value_keywords = ("close", "adj close", "value", "price", "amount")
+        value_key = next((fields[k] for k in value_keywords if k in fields), None)
+        if value_key is None:
+            raise ValueError(
+                "Could not find a numeric data column. "
+                "Rename a column to 'close', 'price', 'value', or 'amount'."
+            )
+        date_key = next(
+            (fields[k] for k in ("date", "timestamp", "time", "datetime") if k in fields),
+            reader.fieldnames[0],
+        )
+        dates, values = [], []
+        for row in reader:
+            try:
+                values.append(float(row[value_key]))
+                dates.append(str(row[date_key]).strip())
+            except (TypeError, ValueError, KeyError):
+                continue
+        if len(values) < 60:
+            raise ValueError(
+                f"CSV needs at least 60 numeric rows for windowed forecasting "
+                f"(found {len(values)})."
+            )
+        return PriceSeries(dates, np.asarray(values, dtype=float), "upload")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Malformed CSV: {exc}") from exc
 
 
 class DatasetRegistry:

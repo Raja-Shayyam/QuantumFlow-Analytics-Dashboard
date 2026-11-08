@@ -16,3 +16,6 @@ qbraid>=0.8.0
 # Tests
 httpx>=0.27.0
 pytest>=8.0.0
+
+
+#qbr_27f8f17cc71b685d5e9bfb5c9eb476c9246ec5abb2270e27e79512373f7fa5d9

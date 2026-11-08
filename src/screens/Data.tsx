@@ -64,7 +64,8 @@ export function DataManagement() {
     if (!/\.csv$/i.test(file.name)) return notify("Please choose a .csv file.", "warning");
     setUploading(true);
     try {
-      const dataset = await api.upload(file.name.replace(/\.csv$/i, ""), await file.text());
+      // const dataset = await api.upload(file.name.replace(/\.csv$/i, ""), await file.text());
+      const dataset = await api.uploadFile(file.name.replace(/\.csv$/i, ""), file);
       addDataset(dataset);
       update({ datasetId: dataset.id });
       notify(

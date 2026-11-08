@@ -20,7 +20,10 @@ export interface Health {
   version: string;
   data_mode: string;
   model_trained: boolean;
-  integrations: Record<"qiskit" | "qiskit_aer" | "yfinance" | "classiq" | "qbraid", boolean>;
+  integrations: Record<
+    "qiskit" | "qiskit_aer" | "yfinance" | "classiq" | "qbraid",
+    boolean
+  >;
 }
 
 export interface TrainConfig {
@@ -60,7 +63,12 @@ export interface TrainResult {
     lower: number[];
     upper: number[];
   };
-  circuit: { gate_count: number; depth: number; two_qubit_gates: number; layout: string[][] };
+  circuit: {
+    gate_count: number;
+    depth: number;
+    two_qubit_gates: number;
+    layout: string[][];
+  };
   correlation_matrix: number[][];
   dataset: { id: string; name: string; source: string };
   verification?: { backend: string; counts: Record<string, number> };
@@ -128,18 +136,26 @@ export interface ClassiqResult {
   engine: string;
   fallback_reason: string | null;
   before: { gate_count: number; depth: number; two_qubit_gates: number };
-  after: { gate_count: number | null; depth: number | null; two_qubit_gates: number | null };
+  after: {
+    gate_count: number | null;
+    depth: number | null;
+    two_qubit_gates: number | null;
+  };
   reduction_pct: { gate_count: number | null; depth: number | null };
 }
 
 const STORAGE_KEY = "qf_api_url";
 
 export function getApiUrl(): string {
-  const stored = typeof localStorage !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
-  return (stored || import.meta.env.VITE_QUANTUMFLOW_API_URL || "http://localhost:8000").replace(
-    /\/$/,
-    "",
-  );
+  const stored =
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem(STORAGE_KEY)
+      : null;
+  return (
+    stored ||
+    import.meta.env.VITE_QUANTUMFLOW_API_URL ||
+    "http://localhost:8000"
+  ).replace(/\/$/, "");
 }
 
 export function setApiUrl(url: string | null) {
@@ -153,30 +169,72 @@ export class ApiError extends Error {
     public status: number,
   ) {
     super(message);
+    this.name = "ApiError";
   }
 }
 
-async function request<T>(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
+interface RequestOptions extends RequestInit {
+  /** Override the default 20 s timeout for this request. */
+  timeoutMs?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 20_000;
+const UPLOAD_TIMEOUT_MS = 180_000;
+
+async function request<T>(path: string, init?: RequestOptions): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), init?.timeoutMs ?? 20000);
+  const timeoutMs = init?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
+    // Merge caller-supplied headers, then conditionally add Content-Type.
+    // Only force JSON for string bodies — FormData sets its own boundary header.
+    const headers = new Headers(init?.headers as HeadersInit | undefined);
+    if (
+      init?.body != null &&
+      typeof init.body === "string" &&
+      !headers.has("Content-Type")
+    ) {
+      headers.set("Content-Type", "application/json");
+    }
+
     const response = await fetch(`${getApiUrl()}${path}`, {
       ...init,
+      headers,
       signal: controller.signal,
-      headers: init?.body ? { "Content-Type": "application/json" } : undefined,
     });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const detail = Array.isArray(body.detail)
-        ? body.detail.map((d: { msg: string }) => d.msg).join("; ")
-        : body.detail;
-      throw new ApiError(detail || `Request failed (${response.status})`, response.status);
+
+    // Read as text first so non-JSON 4xx/5xx bodies are still surfaced.
+    const text = await response.text();
+    let body: any = {};
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = response.ok ? {} : { detail: text };
+      }
     }
+
+    if (!response.ok) {
+      const raw = body?.detail;
+      const detail = Array.isArray(raw)
+        ? raw.map((d: any) => d?.msg ?? JSON.stringify(d)).join("; ")
+        : typeof raw === "string"
+          ? raw
+          : undefined;
+      throw new ApiError(
+        detail || `Request failed (${response.status})`,
+        response.status,
+      );
+    }
+
     return body as T;
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(
-      controller.signal.aborted ? "Request timed out" : "Cannot reach the QuantumFlow API",
+      controller.signal.aborted
+        ? "Request timed out"
+        : "Cannot reach the QuantumFlow API",
       0,
     );
   } finally {
@@ -184,40 +242,136 @@ async function request<T>(path: string, init?: RequestInit & { timeoutMs?: numbe
   }
 }
 
-const post = <T>(path: string, body: unknown) =>
-  request<T>(path, { method: "POST", body: JSON.stringify(body) });
+const post = <T>(path: string, body: unknown, opts?: { timeoutMs?: number }) =>
+  request<T>(path, {
+    method: "POST",
+    body: JSON.stringify(body),
+    timeoutMs: opts?.timeoutMs,
+  });
+
+const postForm = <T>(
+  path: string,
+  form: FormData,
+  opts?: { timeoutMs?: number },
+) =>
+  request<T>(path, {
+    method: "POST",
+    body: form,
+    timeoutMs: opts?.timeoutMs ?? UPLOAD_TIMEOUT_MS,
+  });
 
 export const api = {
   health: () => request<Health>("/api/health", { timeoutMs: 3000 }),
-  datasets: () => request<{ datasets: Dataset[] }>("/api/datasets", { timeoutMs: 60000 }),
+
+  datasets: () =>
+    request<{ datasets: Dataset[] }>("/api/datasets", { timeoutMs: 60000 }),
+
   preview: (id: string) =>
     request<DatasetPreview>(`/api/datasets/${encodeURIComponent(id)}/preview`),
-  upload: (name: string, csv: string) => post<Dataset>("/api/datasets", { name, csv }),
-  train: (config: TrainConfig) => post<Job<TrainResult>>("/api/qrc/train", config),
-  latest: () => request<TrainResult>("/api/qrc/latest"),
-  compare: () => request<Comparison>("/api/metrics/compare", { timeoutMs: 120000 }),
-  classiq: (
-    body: Pick<TrainConfig, "n_qubits" | "circuit_depth" | "entanglement" | "input_encoding">,
-  ) => post<Job<ClassiqResult>>("/api/classiq/optimize", body),
-  backends: (refresh = false) =>
-    request<{ backends: Backend[]; error: string | null; qbraid_connected: boolean }>(
-      `/api/backends${refresh ? "?refresh=true" : ""}`,
+
+  /** JSON upload — sends the CSV text inside `{ name, csv }`. */
+  upload: (name: string, csv: string) =>
+    post<Dataset>(
+      "/api/datasets",
+      { name, csv },
+      { timeoutMs: UPLOAD_TIMEOUT_MS },
     ),
+
+  /** Multipart upload — preferred for large files; no JSON size limit.
+   *  Targets POST /api/datasets/file (multipart/form-data). */
+  // uploadFile: (name: string, file: File) => {
+  //   const form = new FormData();
+  //   form.append("name", name);
+  //   form.append("csv", file);
+  //   return postForm<Dataset>("/api/datasets/file", form);
+  // },
+  //
+  uploadFile: (_name: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file); // key matches the FastAPI param name
+    return postForm<Dataset>("/api/datasets/file", form);
+  },
+
+  train: (config: TrainConfig) =>
+    post<Job<TrainResult>>("/api/qrc/train", config),
+
+  latest: () => request<TrainResult>("/api/qrc/latest"),
+
+  compare: () =>
+    request<Comparison>("/api/metrics/compare", { timeoutMs: 120000 }),
+
+  classiq: (
+    body: Pick<
+      TrainConfig,
+      "n_qubits" | "circuit_depth" | "entanglement" | "input_encoding"
+    >,
+  ) => post<Job<ClassiqResult>>("/api/classiq/optimize", body),
+
+  backends: (refresh = false) =>
+    request<{
+      backends: Backend[];
+      error: string | null;
+      qbraid_connected: boolean;
+    }>(`/api/backends${refresh ? "?refresh=true" : ""}`),
+
   runOnBackend: (backend_id: string, shots = 1024) =>
     post<Job>("/api/backends/run", { backend_id, shots }),
+
   jobs: () => request<{ jobs: Job[] }>("/api/jobs?limit=25"),
+
   job: <T>(id: string) => request<Job<T>>(`/api/jobs/${id}`),
 };
 
+export type WaitForJobCallback<T> = (job: Job<T>) => void;
+
+export interface WaitForJobOptions<T> {
+  /** First poll delay in ms (default 500). */
+  initialDelayMs?: number;
+  /** Cap on backoff delay in ms (default 5000). */
+  maxDelayMs?: number;
+  /** Give up after this long and throw ApiError 408 (default 30 min). */
+  maxWaitMs?: number;
+  onUpdate?: WaitForJobCallback<T>;
+}
+
 /** Polls a job until it finishes. Rejects with the job's error message on failure. */
-export async function waitForJob<T>(job: Job<T>, onUpdate?: (job: Job<T>) => void): Promise<T> {
+export async function waitForJob<T>(
+  job: Job<T>,
+  optionsOrCallback?: WaitForJobOptions<T> | WaitForJobCallback<T>,
+): Promise<T> {
+  const options: WaitForJobOptions<T> =
+    typeof optionsOrCallback === "function"
+      ? { onUpdate: optionsOrCallback }
+      : (optionsOrCallback ?? {});
+
+  const {
+    initialDelayMs = 500,
+    maxDelayMs = 5_000,
+    maxWaitMs = 30 * 60 * 1000,
+    onUpdate,
+  } = options;
+
   let current = job;
+  let delay = initialDelayMs;
+  const startedAt = Date.now();
+
   while (current.status === "queued" || current.status === "running") {
     onUpdate?.(current);
-    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    if (Date.now() - startedAt > maxWaitMs) {
+      throw new ApiError(
+        `Job ${current.id} did not finish within ${Math.round(maxWaitMs / 1000)} s`,
+        408,
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    delay = Math.min(Math.round(delay * 1.5), maxDelayMs);
     current = await api.job<T>(current.id);
   }
+
   onUpdate?.(current);
-  if (current.status === "failed") throw new ApiError(current.error || "Job failed", 500);
+  if (current.status === "failed")
+    throw new ApiError(current.error || "Job failed", 500);
   return current.result as T;
 }

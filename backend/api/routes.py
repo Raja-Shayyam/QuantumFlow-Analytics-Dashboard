@@ -6,7 +6,9 @@ import importlib.util
 import threading
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, status
+# from fastapi import APIRouter, HTTPException, status
+# from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from api.models import BackendRunRequest, ClassiqRequest, DatasetUpload, PortfolioRequest, QCBMRequest, QRCTrainRequest
 from config import settings
@@ -92,13 +94,53 @@ def dataset_preview(dataset_id: str) -> dict:
     series = _series(dataset_id)
     return {"id": dataset_id, "values": downsample(series.values, 60), "stats": describe(series.values), "source": series.source}
 
-
+#
+# @router.post("/datasets", status_code=status.HTTP_201_CREATED)
+# def upload_dataset(body: DatasetUpload) -> dict:
+#     try:
+#         meta = datasets.add_upload(body.name, body.csv)
+#     except ValueError as exc:
+#         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+#     return _dataset_summary(meta["id"])
 @router.post("/datasets", status_code=status.HTTP_201_CREATED)
 def upload_dataset(body: DatasetUpload) -> dict:
     try:
         meta = datasets.add_upload(body.name, body.csv)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+    except Exception as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Could not parse CSV: {exc}")
+    return _dataset_summary(meta["id"])
+
+
+# @router.post("/datasets/file", status_code=status.HTTP_201_CREATED)
+# async def upload_dataset_file(
+#     name: str = Form(..., min_length=1, max_length=80),
+#     csv: UploadFile = File(...),
+# ) -> dict:
+#     try:
+#         content = (await csv.read()).decode("utf-8")
+#         meta = datasets.add_upload(name, content)
+#     except ValueError as exc:
+#         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+#     return _dataset_summary(meta["id"])
+@router.post("/datasets/file", status_code=status.HTTP_201_CREATED)
+async def upload_dataset_file(file: UploadFile = File(...)) -> dict:
+    content = await file.read()
+    # UTF-8 first; fall back to latin-1 for Excel/Windows-1252 CSVs
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+    # Strip the .csv extension for the display name
+    raw_name = file.filename or "upload"
+    name = raw_name.rsplit(".", 1)[0] or raw_name
+    try:
+        meta = datasets.add_upload(name, text)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+    except Exception as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Could not parse CSV: {exc}")
     return _dataset_summary(meta["id"])
 
 

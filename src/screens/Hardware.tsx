@@ -36,11 +36,13 @@ function BackendCard({
   backend,
   jobs,
   running,
+  hasModel,
   onRun,
 }: {
   backend: Backend;
   jobs: Job[];
   running: boolean;
+  hasModel: boolean;
   onRun: () => void;
 }) {
   const finished = jobs
@@ -121,13 +123,14 @@ function BackendCard({
       </div>
       <Button
         variant="secondary"
-        disabled={offline}
+        disabled={offline || !hasModel}
         loading={running}
         onClick={onRun}
-        icon={offline ? undefined : "play"}
+        icon={offline || !hasModel ? undefined : "play"}
+        title={!hasModel && !offline ? "Deploy a model first to run jobs" : undefined}
         className="full"
       >
-        {offline ? "Unavailable" : running ? "Running…" : "Run job"}
+        {offline ? "Unavailable" : !hasModel ? "No model" : running ? "Running…" : "Run job"}
       </Button>
     </Card>
   );
@@ -194,7 +197,9 @@ export function Hardware() {
         title="Hardware monitor"
         description={
           live
-            ? "Backends reported by qBraid, plus the always-available local statevector simulator."
+            ? backendError
+              ? "Real quantum backends unavailable — running in local-only mode."
+              : "Backends reported by qBraid, plus the always-available local statevector simulator."
             : "Sample backends shown while the API is offline."
         }
         actions={
@@ -252,6 +257,7 @@ export function Hardware() {
             backend={b}
             jobs={jobs}
             running={!!running[b.id]}
+            hasModel={!!latest}
             onRun={() => run(b)}
           />
         ))}
@@ -294,6 +300,7 @@ export function Hardware() {
                   backend.startsWith("local") ||
                   backend.includes("simulator") ||
                   backend === "Classiq synthesis";
+                const cost = (j.result as any)?.cost;
                 return (
                   <tr key={j.id}>
                     <td>
@@ -317,7 +324,9 @@ export function Hardware() {
                       )}
                     </td>
                     <td className="num mono">{fmtDuration(j.duration_s)}</td>
-                    <td className="num mono">{local ? "$0.00" : "—"}</td>
+                    <td className="num mono">
+                      {cost != null ? `$${Number(cost).toFixed(4)}` : local ? "$0.00" : "—"}
+                    </td>
                   </tr>
                 );
               })}

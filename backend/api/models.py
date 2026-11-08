@@ -45,8 +45,8 @@ class BackendRunRequest(BaseModel):
 
 class DatasetUpload(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
-    csv: str = Field(..., min_length=10, max_length=5_000_000)
-
+    # csv: str = Field(..., min_length=10, max_length=5_000_000)
+    csv: str = Field(..., min_length=10)
 
 class QCBMRequest(BaseModel):
     dataset_id: str = "sp500"
